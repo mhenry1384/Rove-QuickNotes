@@ -119,8 +119,6 @@ button, input, textarea { font: inherit; color: inherit; }
 .btn:hover:not(:disabled) { border-color: var(--accent); }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); font-weight: 600; }
-#sync-btn.dirty::after { content: " •"; color: var(--accent); font-weight: 700; }
-#sync-btn.needs-auth { border-color: var(--accent); color: var(--accent); font-weight: 600; }
 
 /* ---------- main ---------- */
 .main {

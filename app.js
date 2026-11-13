@@ -64,7 +64,7 @@
 
   const $ = (s) => document.querySelector(s);
   const els = {
-    status: $('#status'), syncBtn: $('#sync-btn'), search: $('#search'),
+    status: $('#status'), signinBtn: $('#signin-btn'), actions: $('#actions'), search: $('#search'),
     newNote: $('#new-note'), newList: $('#new-list'),
     pinnedSec: $('#pinned-sec'), pinned: $('#pinned'), othersHead: $('#others-head'), others: $('#others'),
     empty: $('#empty'),
@@ -129,42 +129,76 @@
   const serializeFile = (notes) => JSON.stringify({ app: 'QuickNotes', format: 1, notes }, null, 1) + '\n';
 
   // ---------- Google auth ----------
+  // Uses Google's redirect sign-in instead of a popup. A token lasts about an hour; to get a
+  // new one the app briefly goes to Google, which sends it straight back (no prompt) while
+  // you're still signed in to Google. This needs no tap, so syncing never has to ask you.
   class AuthError extends Error {}
-  let tokenClient = null;
-  let needConsent = false;
+  const REDIRECT_URI = new URL('./', location.href).href;
+  const AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth';
   const tokenValid = () => !!token && token.exp > Date.now() + 60_000;
+  const signedInOnce = () => store.get('signedInOnce', false);
+  let authNeeded = false;     // Google wants a tap (first sign-in, or it asked to confirm)
+  let authMessage = '';
 
-  function initTokenClient() {
-    if (tokenClient || !CONFIGURED || !window.google?.accounts?.oauth2) return;
-    tokenClient = google.accounts.oauth2.initTokenClient({ client_id: CFG.CLIENT_ID, scope: SCOPE, callback: () => {} });
-    renderAuth();
-  }
-  if (window.__gisLoaded) initTokenClient();
-  else window.addEventListener('gis-loaded', initTokenClient);
-
-  // Must be called synchronously from a user gesture (it may open a popup).
-  function getToken() {
-    if (tokenValid()) return Promise.resolve(token.value);
-    return new Promise((resolve, reject) => {
-      if (!CONFIGURED) return reject(new Error('Not configured — set CLIENT_ID in config.js'));
-      if (!tokenClient) return reject(new Error('Google sign-in is still loading (or you are offline)'));
-      tokenClient.callback = (resp) => {
-        if (resp.error) return reject(new AuthError(resp.error_description || resp.error));
-        if (!google.accounts.oauth2.hasGrantedAllScopes(resp, SCOPE)) {
-          needConsent = true;
-          return reject(new AuthError('Google Drive access was not allowed — tap Sign in and tick the box'));
-        }
-        needConsent = false;
-        token = { value: resp.access_token, exp: Date.now() + Number(resp.expires_in) * 1000 };
-        store.set('token', token);
-        store.set('signedInOnce', true);
-        renderAuth();
-        resolve(token.value);
-      };
-      tokenClient.error_callback = (err) => reject(new AuthError(
-        err?.type === 'popup_closed' ? 'Sign-in window was closed' : (err?.message || 'Sign-in failed')));
-      tokenClient.requestAccessToken({ prompt: needConsent ? 'consent' : '' });
+  function authRedirect(interactive) {
+    const st = uid();
+    store.set('authState', st);
+    store.set('authAttempt', Date.now());
+    const p = new URLSearchParams({
+      client_id: CFG.CLIENT_ID, redirect_uri: REDIRECT_URI, response_type: 'token',
+      scope: SCOPE, include_granted_scopes: 'true', state: st,
     });
+    const email = store.get('email', null);
+    if (email) p.set('login_hint', email);
+    if (!interactive) p.set('prompt', 'none');
+    else if (!email) p.set('prompt', 'select_account');
+    saveLocal();
+    location.assign(`${AUTH_URL}?${p}`);
+  }
+
+  // Coming back from Google: the result is in the URL fragment.
+  (function readAuthResponse() {
+    if (!/[#&]state=/.test(location.hash)) return;
+    const h = new URLSearchParams(location.hash.slice(1));
+    history.replaceState(null, '', location.pathname + location.search);
+    const expected = store.get('authState', null);
+    store.del('authState');
+    if (!expected || h.get('state') !== expected) return;
+    // authAttempt is kept: if this token is rejected, we won't bounce straight back to Google.
+    if (h.get('access_token')) {
+      if (!(h.get('scope') || '').split(' ').includes(SCOPE)) {
+        authNeeded = true;
+        authMessage = 'Google Drive access was not allowed. Tap Sign in and tick the box.';
+        return;
+      }
+      token = { value: h.get('access_token'), exp: Date.now() + Number(h.get('expires_in') || 3600) * 1000 };
+      store.set('token', token);
+      store.set('signedInOnce', true);
+    } else {
+      // interaction_required / login_required / consent_required etc.: needs a tap.
+      authNeeded = true;
+      const err = h.get('error');
+      if (err === 'access_denied') authMessage = 'Google sign-in was cancelled';
+      else if (!/_required$/.test(err || '')) authMessage = 'Google sign-in failed: ' + (err || 'unknown error');
+    }
+  })();
+
+  // Gets a fresh token without asking, but only at a moment when the quick trip to
+  // Google and back can't interrupt anything (no note open, nothing being typed).
+  let lastActivity = Date.now();
+  for (const ev of ['pointerdown', 'keydown', 'wheel', 'touchmove']) {
+    addEventListener(ev, () => { lastActivity = Date.now(); }, { passive: true, capture: true });
+  }
+  function refreshAuthIfSafe({ idleMs = 0 } = {}) {
+    if (!CONFIGURED || tokenValid() || authNeeded || !signedInOnce() || !navigator.onLine) return false;
+    if (els.dlg.open || document.visibilityState !== 'visible') return false;
+    if (document.activeElement === els.search && els.search.value) return false;
+    if (Date.now() - lastActivity < idleMs) return false;
+    // The last trip didn't come back with a token (e.g. Back was pressed on Google's page).
+    if (Date.now() - store.get('authAttempt', 0) < 120_000) { authNeeded = true; renderAuth(); return false; }
+    setStatus('Connecting to Google Drive…', false, true);
+    authRedirect(false);
+    return true;
   }
 
   // ---------- Drive API ----------
@@ -173,7 +207,7 @@
     const res = await fetch(url, { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${token.value}` } });
     if (res.status === 401) {
       token = null; store.del('token'); renderAuth();
-      throw new AuthError('Session expired — tap Sync to sign in again');
+      throw new AuthError('Google sign-in expired');
     }
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
@@ -240,9 +274,9 @@
       return;
     }
     if (!tokenValid()) {
-      const signedInOnce = store.get('signedInOnce', false);
-      if (state.dirty) setStatus(signedInOnce ? 'Not synced — tap Sync' : 'Saved on this device only', false, true);
-      else if (signedInOnce) setStatus('Tap Sync to check for changes', false, true);
+      if (refreshAuthIfSafe()) return;
+      if (authNeeded || !signedInOnce()) setStatus(state.dirty ? 'Saved on this device only' : '', false, true);
+      else if (state.dirty) setStatus('Not synced yet', false, true);
       return;
     }
     if (manual || state.dirty) setStatus('Syncing…', false, true);
@@ -265,8 +299,15 @@
       if (fileId && version === state.remoteVersion && !state.dirty) {
         state.lastSync = Date.now();
         if (manual) setStatus('Up to date');
-        else if (/Syncing|Tap Sync|Not synced|Offline/.test(els.status.textContent)) setStatus('');
+        else if (/Syncing|Not synced|Offline|Saved on this|Network|expired/.test(els.status.textContent)) setStatus('');
         return;
+      }
+      if (!store.get('email', null)) {
+        // Remembered so silent re-sign-in picks the right Google account.
+        try {
+          const about = await (await api(`${API}/about?fields=user(emailAddress)`)).json();
+          if (about.user?.emailAddress) store.set('email', about.user.emailAddress);
+        } catch { /* only a hint */ }
       }
 
       const remote = fileId ? parseFile(await (await api(`${API}/files/${fileId}?alt=media`)).text()) : [];
@@ -305,7 +346,10 @@
 
   function handleError(e) {
     console.error(e);
-    if (e instanceof AuthError) { renderAuth(); setStatus(e.message, true); }
+    if (e instanceof AuthError) {
+      renderAuth();
+      if (!refreshAuthIfSafe()) setStatus(state.dirty ? 'Not synced yet' : '', false, true);
+    }
     else if (!navigator.onLine) setStatus('Offline — changes are kept on this device', false, true);
     else if (e instanceof TypeError && /fetch|network/i.test(e.message)) setStatus('Network error — will retry', true);
     else setStatus(e.message, true);
@@ -320,20 +364,17 @@
     if (msg && !isError && !sticky) statusTimer = setTimeout(() => { els.status.textContent = ''; }, 3000);
   }
 
+  // The Sign in button only appears when Google needs you to tap something.
   function renderAuth() {
-    const btn = els.syncBtn;
-    btn.hidden = !CONFIGURED;
-    const signedInOnce = store.get('signedInOnce', false);
-    btn.disabled = !!syncing;
-    btn.textContent = syncing ? 'Syncing…' : (tokenValid() || signedInOnce) ? 'Sync' : 'Sign in';
-    btn.classList.toggle('dirty', !syncing && state.dirty);
-    btn.classList.toggle('needs-auth', !syncing && !tokenValid() && signedInOnce);
-    btn.title = state.dirty ? 'Some changes are not saved to Google Drive yet' : 'Sync with Google Drive';
+    const need = CONFIGURED && !tokenValid() && (authNeeded || !signedInOnce());
+    // Before the first sign-in, the big button in the middle of the page is enough.
+    els.signinBtn.hidden = !need || !signedInOnce();
+    // Search and the new-note buttons appear once you've signed in on this device.
+    els.actions.hidden = CONFIGURED && !signedInOnce() && !tokenValid();
+    if (need && authMessage) setStatus(authMessage, true);
   }
 
-  els.syncBtn.addEventListener('click', () => {
-    getToken().then(() => sync({ manual: true })).catch(handleError);
-  });
+  els.signinBtn.addEventListener('click', () => authRedirect(true));
 
   // ---------- UI: grid of note cards ----------
   function matches(n, terms) {
@@ -361,14 +402,14 @@
         els.empty.textContent = 'No notes match your search.';
       } else if (!CONFIGURED) {
         els.empty.innerHTML = '<p>Setup needed: put your Google OAuth client ID in <code>config.js</code>. See README.md.</p>';
-      } else if (!store.get('signedInOnce', false)) {
+      } else if (!signedInOnce() && !tokenValid()) {
         const p = document.createElement('p');
         p.textContent = 'Sign in with Google to keep your notes in sync across devices.';
         const b = document.createElement('button');
         b.className = 'btn primary';
         b.type = 'button';
         b.textContent = 'Sign in with Google';
-        b.addEventListener('click', () => getToken().then(() => sync({ manual: true })).catch(handleError));
+        b.addEventListener('click', () => authRedirect(true));
         els.empty.append(p, b);
       } else {
         els.empty.textContent = 'No notes yet. Tap + Note or + List to add one.';
@@ -494,7 +535,7 @@
     });
     state.notes.push(n);
     saveLocal();
-    openEditor(n.id, type === 'list' ? 'item' : 'text');
+    openEditor(n.id, 'title');
   }
 
   function openEditor(id, focus) {
@@ -511,7 +552,8 @@
     requestAnimationFrame(() => {
       autosize(els.text);
       for (const ta of els.items.querySelectorAll('textarea')) autosize(ta);
-      if (focus === 'text') els.text.focus();
+      if (focus === 'title') els.title.focus();
+      else if (focus === 'text') els.text.focus();
       else if (focus === 'item') els.items.querySelector('textarea')?.focus();
       else els.dlg.focus();
     });
@@ -908,7 +950,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (els.dlg.open || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (els.dlg.open || els.actions.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
     if (e.key === '/') { e.preventDefault(); els.search.focus(); }
     else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); newNote('text'); }
@@ -924,10 +966,13 @@
     }
   });
   window.addEventListener('online', () => sync());
+  // Back from Google's page via the Back button (page restored from cache): try again later.
+  window.addEventListener('pageshow', (e) => { if (e.persisted) { renderAuth(); sync(); } });
   window.addEventListener('offline', () => setStatus('Offline — changes are kept on this device', false, true));
   setInterval(() => {
     if (document.visibilityState !== 'visible') return;
     if (tokenValid()) sync();
+    else if (!syncing) refreshAuthIfSafe({ idleMs: 20_000 }); // signed out an hour later: renew while idle
     if (!els.dlg.open) renderGrid(); // refresh "Edited … ago"
     else if (ed.id) els.edTime.textContent = 'Edited ' + ago(cur()?.updated || Date.now());
   }, POLL_MS);

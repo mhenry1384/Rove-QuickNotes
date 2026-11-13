@@ -14,7 +14,7 @@ A small installable web app (PWA) for quick notes and to-do lists. It syncs betw
 
 All notes are stored in a single file, `QuickNotes.json`, in the root of My Drive. The app creates the file the first time you sign in.
 
-- Edits are saved to Drive about 1.5 seconds after you stop typing.
+- There is no Sync button. Edits are saved to Drive about 1.5 seconds after you stop typing.
 - While the app is open, it checks Drive for changes every minute and whenever you switch back to it. If the file hasn't changed, the check costs one small request.
 - Each sync downloads the file, merges it with the notes on the device, and uploads the result only if something changed. If the same note was edited on two devices, the most recent edit wins. Changes to different notes never overwrite each other.
 - When you delete a note, a marker is kept in the file for 30 days so that the delete also reaches your other devices.
@@ -30,6 +30,13 @@ Because of `drive.file`, the app can't use a `QuickNotes.json` that you make by 
 This app reuses the Google Cloud OAuth client from Rove Recipes. `config.js` already contains that client ID. It works because both apps are served from the same origin (`https://mhenry1384.github.io` and `http://localhost:8080`), and that project already has the Drive API and the `drive.file` scope set up.
 
 The Google sign-in screen will show the app name from that project's consent screen, "Rove Recipes". To change it, go to **Google Auth Platform → Branding** in the Cloud console and rename it, for example to "Rove apps".
+
+**Redirect URIs (required):** sign-in uses Google's redirect flow rather than a popup, so in the Cloud console go to **Google Auth Platform → Clients →** (the Rove Recipes web client) **→ Authorized redirect URIs** and add both of these, exactly as written, including the trailing slash:
+
+- `https://mhenry1384.github.io/Rove-QuickNotes/`
+- `http://localhost:8080/`
+
+Adding them doesn't affect Rove Recipes.
 
 To use a separate Google Cloud project instead, follow the "Google Cloud OAuth client" steps in the Rove Recipes README with only the `.../auth/drive.file` scope, then put the new client ID in `config.js`.
 
@@ -60,5 +67,6 @@ or `python -m http.server 8080`, then open <http://localhost:8080>.
 
 ## Notes
 
-- Google sign-in tokens last about an hour. When the token has expired, the Sync button is highlighted, and tapping it signs you back in, usually without asking anything. Edits made in the meantime are kept on the device and saved on that sync. A dot on the Sync button means there are changes that aren't in Drive yet.
+- Google sign-in tokens last about an hour. To get a new one, the app briefly visits Google, which sends it straight back without asking anything as long as you're still signed in to Google. You may see the page blink. This only happens when nothing is in the way: when you open or switch back to the app, when you close a note, or after 20 seconds of not touching the app. It never happens while a note is open. Edits made in the meantime are kept on the device and saved right after.
+- The Sign in button appears only if Google needs you to confirm something, for example after you sign out of Google.
 - **Releasing updates:** increase `APP_VERSION` in `version.js` on every push. The number appears next to the app name, and it also names the service-worker cache, so installed copies drop their old files.

@@ -19,11 +19,11 @@
       <span id="version" class="version"></span>
     </div>
     <div id="status" class="status" role="status" aria-live="polite"></div>
-    <button id="sync-btn" class="btn" type="button">Sign in</button>
+    <button id="signin-btn" class="btn primary" type="button" hidden>Sign in</button>
   </header>
 
   <main class="main">
-    <div class="actions">
+    <div id="actions" class="actions" hidden>
       <input id="search" type="search" placeholder="Search notes…" autocomplete="off"
              spellcheck="false" aria-label="Search notes">
       <button id="new-note" class="btn primary" type="button" title="New note (N)">+ Note</button>
@@ -78,7 +78,5 @@
   <script src="version.js"></script>
   <script src="config.js"></script>
   <script src="app.js"></script>
-  <script src="https://accounts.google.com/gsi/client" async
-          onload="window.__gisLoaded = true; window.dispatchEvent(new Event('gis-loaded'))"></script>
 </body>
 </html>
