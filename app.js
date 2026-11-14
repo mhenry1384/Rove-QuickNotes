@@ -522,6 +522,20 @@
   const ed = { id: null, knownUpdated: 0 };
   const cur = () => (ed.id ? byId(ed.id) : null);
 
+  // Size the editor to the part of the screen the on-screen keyboard leaves visible,
+  // so the toolbar sits just above the keyboard instead of hidden behind it.
+  const vv = window.visualViewport;
+  if (vv) {
+    const fitViewport = () => {
+      const root = document.documentElement.style;
+      root.setProperty('--vv-h', vv.height + 'px');
+      root.setProperty('--vv-top', vv.offsetTop + 'px');
+    };
+    vv.addEventListener('resize', fitViewport);
+    vv.addEventListener('scroll', fitViewport);
+    fitViewport();
+  }
+
   function autosize(ta) {
     ta.style.height = 'auto';
     ta.style.height = ta.scrollHeight + 'px';
