@@ -28,6 +28,19 @@
 
   const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
 
+  // Something shared to the app from Android's share sheet (see share_target in the manifest).
+  // It's kept in localStorage until it has been added, so it survives a trip to Google sign-in.
+  (function captureShare() {
+    const q = new URLSearchParams(location.search);
+    if (!['share_title', 'share_text', 'share_url'].some((k) => q.has(k))) return;
+    const pending = store.get('pendingShares', []);
+    pending.push({ title: q.get('share_title') || '', text: q.get('share_text') || '', url: q.get('share_url') || '' });
+    store.set('pendingShares', pending);
+    for (const k of ['share_title', 'share_text', 'share_url']) q.delete(k);
+    const rest = q.toString();
+    history.replaceState(null, '', location.pathname + (rest ? '?' + rest : '') + location.hash);
+  })();
+
   // A note: {id, type: 'text'|'list', title, text, items: [{id, text, done}], color, pinned,
   //          created, updated, deleted?}. Timestamps are ms since epoch.
   function normNote(n) {
@@ -139,8 +152,10 @@
   const signedInOnce = () => store.get('signedInOnce', false);
   let authNeeded = false;     // Google wants a tap (first sign-in, or it asked to confirm)
   let authMessage = '';
+  let redirecting = false;    // the page is on its way to Google
 
   function authRedirect(interactive) {
+    redirecting = true;
     const st = uid();
     store.set('authState', st);
     store.set('authAttempt', Date.now());
@@ -951,6 +966,54 @@
     fn?.();
   });
 
+  // ---------- shared links ----------
+  // Turns what another app shared into one line, e.g. "Page title https://…".
+  function shareLine({ title, text, url }) {
+    const URL_RE = /\bhttps?:\/\/[^\s<>"']+[^\s<>"'.,;:!?)\]]/;
+    const oneLine = (s) => s.replace(/\s+/g, ' ').trim();
+    title = oneLine(title);
+    text = oneLine(text);
+    url = oneLine(url) || text.match(URL_RE)?.[0] || title.match(URL_RE)?.[0] || '';
+    if (!url) return text || title;
+    // Apps that put the link inside the text usually write a useful description around it.
+    if (text.includes(url) && text !== url) return text;
+    const label = title && !URL_RE.test(title) ? title : text && !URL_RE.test(text) ? text : '';
+    return label ? `${label} ${url}` : url;
+  }
+
+  const isToDo = (n) => !n.deleted && n.title.replace(/\s+/g, ' ').trim().toLowerCase() === 'to do';
+
+  // Adds shared links to the bottom of the note or list titled "To do", creating the list if needed.
+  function applyPendingShares() {
+    const pending = store.get('pendingShares', []);
+    if (!pending.length) return;
+    store.del('pendingShares');
+    const lines = pending.map(shareLine).filter(Boolean);
+    if (!lines.length) return;
+
+    let n = state.notes.filter(isToDo).sort((a, b) => b.updated - a.updated)[0];
+    if (!n) {
+      const now = Date.now();
+      n = normNote({ id: uid(), type: 'list', title: 'To do', created: now, updated: now, items: [] });
+      state.notes.push(n);
+    }
+    if (n.type === 'list') {
+      // At the end of the unchecked items, which is the bottom of the list as you see it.
+      let at = -1;
+      n.items.forEach((i, k) => { if (!i.done) at = k; });
+      // Fill a blank last item instead of leaving it above the new one.
+      if (at >= 0 && !n.items[at].text.trim()) n.items.splice(at--, 1);
+      n.items.splice(at + 1, 0, ...lines.map((text) => ({ id: uid(), text, done: false })));
+    } else {
+      const body = n.text.replace(/\s+$/, '');
+      n.text = (body ? body + '\n' : '') + lines.join('\n');
+    }
+    touch(n);
+    renderGrid();
+    const id = n.id;
+    toast(`Added to ${n.title.trim() || 'To do'}`, { label: 'Open', fn: () => openEditor(id) });
+  }
+
   // ---------- wiring ----------
   els.newNote.addEventListener('click', () => newNote('text'));
   els.newList.addEventListener('click', () => newNote('list'));
@@ -1008,5 +1071,7 @@
 
   renderGrid();
   renderAuth();
-  sync();
+  // Add shared links after the first sync, so they go into the latest copy of "To do"
+  // (and don't create a second one). Offline or signed out, they're added straight away.
+  sync().finally(() => { if (!redirecting) applyPendingShares(); });
 })();
