@@ -8,7 +8,7 @@
   const FILE_NAME = CFG.FILE_NAME || 'QuickNotes.json';
   const CONFIGURED = !!CFG.CLIENT_ID && !CFG.CLIENT_ID.startsWith('YOUR_');
   const TOMBSTONE_DAYS = 30;        // deleted notes are remembered this long so other devices see the delete
-  const POLL_MS = 60_000;           // check Drive for changes this often while the app is visible
+  const POLL_MS = 15_000;           // check Drive for changes this often while the app is visible
   const PUSH_DELAY_MS = 1500;       // wait this long after the last keystroke before saving to Drive
 
   const COLORS = [
