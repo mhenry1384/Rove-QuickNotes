@@ -256,7 +256,9 @@ button, input, textarea { font: inherit; color: inherit; }
 @media (hover: none) { .item-del { opacity: 0.6; } }
 .item-del:hover { background: rgba(127, 127, 127, 0.18); color: var(--text); }
 .add-item {
-  align-self: flex-start;
+  align-self: stretch;
+  text-align: left;
+  font: inherit;
   border: none;
   background: transparent;
   color: var(--muted);
