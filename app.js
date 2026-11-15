@@ -564,7 +564,7 @@
     });
     state.notes.push(n);
     saveLocal();
-    openEditor(n.id, 'title');
+    openEditor(n.id, type === 'list' ? 'item' : 'text');
   }
 
   function openEditor(id, focus) {
