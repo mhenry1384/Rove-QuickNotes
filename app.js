@@ -695,7 +695,7 @@
     if (done.length) {
       const det = document.createElement('details');
       det.className = 'done-group';
-      det.open = store.get('showChecked', true);
+      det.open = store.get('showChecked', false);
       det.addEventListener('toggle', () => store.set('showChecked', det.open));
       const sum = document.createElement('summary');
       sum.textContent = `${done.length} checked item${done.length === 1 ? '' : 's'}`;
