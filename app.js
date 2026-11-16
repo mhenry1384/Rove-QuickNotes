@@ -8,6 +8,7 @@
   const FILE_NAME = CFG.FILE_NAME || 'QuickNotes.json';
   const CONFIGURED = !!CFG.CLIENT_ID && !CFG.CLIENT_ID.startsWith('YOUR_');
   const TOMBSTONE_DAYS = 30;        // deleted notes are remembered this long so other devices see the delete
+  const TRASH_DAYS = 7;             // notes in Trash are deleted for good after this long
   const POLL_MS = 15_000;           // check Drive for changes this often while the app is visible
   const PUSH_DELAY_MS = 1500;       // wait this long after the last keystroke before saving to Drive
 
@@ -42,7 +43,8 @@
   })();
 
   // A note: {id, type: 'text'|'list', title, text, items: [{id, text, done}], color, pinned,
-  //          created, updated, deleted?}. Timestamps are ms since epoch.
+  //          created, updated, trashed?, deleted?}. Timestamps are ms since epoch.
+  // `trashed` is when the note was moved to Trash; `deleted` marks a note that is gone for good.
   function normNote(n) {
     if (!n || typeof n.id !== 'string' || !n.id) return null;
     const out = {
@@ -60,6 +62,7 @@
       updated: Number(n.updated) || 0,
     };
     if (n.deleted) out.deleted = true;
+    else if (Number(n.trashed)) out.trashed = Number(n.trashed);
     return out;
   }
   const normList = (arr) => (Array.isArray(arr) ? arr.map(normNote).filter(Boolean) : []);
@@ -71,6 +74,7 @@
     dirty: store.get('dirty', false),                // local changes not yet saved to Drive
     lastSync: 0,
     query: '',
+    view: 'notes',                                   // 'notes' or 'trash'
   };
   let editSeq = 0;
   let token = store.get('token', null);              // {value, exp}
@@ -78,7 +82,8 @@
   const $ = (s) => document.querySelector(s);
   const els = {
     status: $('#status'), signinBtn: $('#signin-btn'), actions: $('#actions'), search: $('#search'),
-    newNote: $('#new-note'), newList: $('#new-list'),
+    newNote: $('#new-note'), newList: $('#new-list'), trashBtn: $('#trash-btn'),
+    trashBar: $('#trash-bar'), trashBack: $('#trash-back'), trashEmpty: $('#trash-empty'), trashNote: $('#trash-note'),
     pinnedSec: $('#pinned-sec'), pinned: $('#pinned'), othersHead: $('#others-head'), others: $('#others'),
     empty: $('#empty'),
     dlg: $('#editor'), title: $('#ed-title'), text: $('#ed-text'), items: $('#ed-items'),
@@ -101,6 +106,26 @@
     store.set('dirty', true);
     renderAuth();
     scheduleSync(PUSH_DELAY_MS);
+  }
+
+  // ---------- trash ----------
+  const live = (n) => !n.deleted && !n.trashed;
+  const trashExpires = (n) => n.trashed + TRASH_DAYS * 86400_000;
+
+  // Deletes a note for good. Only a small marker is kept, so the delete reaches other devices.
+  function destroy(n) {
+    n.deleted = true;
+    delete n.trashed;
+    n.title = ''; n.text = ''; n.items = [];
+    touch(n);
+  }
+
+  // Notes that have been in Trash for TRASH_DAYS are deleted for good.
+  function purgeTrash() {
+    const now = Date.now();
+    let any = false;
+    for (const n of state.notes) if (n.trashed && !n.deleted && trashExpires(n) <= now) { destroy(n); any = true; }
+    return any;
   }
 
   // ---------- time ----------
@@ -385,7 +410,9 @@
     // Before the first sign-in, the big button in the middle of the page is enough.
     els.signinBtn.hidden = !need || !signedInOnce();
     // Search and the new-note buttons appear once you've signed in on this device.
-    els.actions.hidden = CONFIGURED && !signedInOnce() && !tokenValid();
+    const signedOut = CONFIGURED && !signedInOnce() && !tokenValid();
+    els.actions.hidden = signedOut || state.view === 'trash';
+    els.trashBtn.hidden = signedOut || state.view === 'trash';
     if (need && authMessage) setStatus(authMessage, true);
   }
 
@@ -400,7 +427,10 @@
 
   function renderGrid() {
     const terms = state.query.toLowerCase().split(/\s+/).filter(Boolean);
-    const all = state.notes.filter((n) => !n.deleted);
+    if (state.view === 'trash') { renderTrash(); return; }
+    els.trashBar.hidden = true;
+    els.trashNote.hidden = true;
+    const all = state.notes.filter(live);
     const shown = all.filter((n) => matches(n, terms)).sort((a, b) => b.created - a.created);
     const pinned = shown.filter((n) => n.pinned);
     const others = shown.filter((n) => !n.pinned);
@@ -430,7 +460,42 @@
         els.empty.textContent = 'No notes yet. Tap + Note or + List to add one.';
       }
     }
+    markClipped();
+  }
+
+  function markClipped() {
     for (const c of document.querySelectorAll('.card')) c.classList.toggle('clipped', c.scrollHeight > c.clientHeight + 1);
+  }
+
+  function renderTrash() {
+    const shown = state.notes.filter((n) => n.trashed && !n.deleted).sort((a, b) => b.trashed - a.trashed);
+    els.trashBar.hidden = false;
+    els.trashNote.hidden = false;
+    els.trashEmpty.disabled = !shown.length;
+    els.pinnedSec.hidden = true;
+    els.pinned.replaceChildren();
+    els.othersHead.hidden = true;
+    els.others.replaceChildren(...shown.map((n) => card(n, true)));
+    els.empty.hidden = !!shown.length;
+    els.empty.textContent = 'Trash is empty.';
+    markClipped();
+  }
+
+  function showView(view) {
+    if (state.view === view) return;
+    state.view = view;
+    renderAuth();
+    renderGrid();
+    scrollTo(0, 0);
+  }
+  function openTrash() {
+    if (state.view === 'trash') return;
+    history.pushState({ qnTrash: true }, '');
+    showView('trash');
+  }
+  function closeTrash() {
+    if (history.state?.qnTrash) history.back(); // popstate switches the view back
+    else showView('notes');
   }
 
   // Turns URLs into links; everything else stays as plain text nodes.
@@ -450,13 +515,15 @@
     if (last < text.length) parent.append(text.slice(last));
   }
 
-  function card(n) {
+  function card(n, inTrash = false) {
     const el = document.createElement('div');
-    el.className = 'card';
+    el.className = 'card' + (inTrash ? ' trashed' : '');
     el.dataset.id = n.id;
     el.dataset.color = n.color;
-    el.tabIndex = 0;
-    el.setAttribute('aria-label', `Open ${n.type === 'list' ? 'list' : 'note'}${n.title ? ': ' + n.title : ''}`);
+    if (!inTrash) {
+      el.tabIndex = 0;
+      el.setAttribute('aria-label', `Open ${n.type === 'list' ? 'list' : 'note'}${n.title ? ': ' + n.title : ''}`);
+    }
 
     if (n.title.trim()) {
       const h = document.createElement('h3');
@@ -474,6 +541,7 @@
         b.type = 'button';
         b.className = 'check';
         b.dataset.item = i.id;
+        b.disabled = inTrash;
         b.setAttribute('aria-label', `Mark done: ${i.text}`);
         const span = document.createElement('span');
         linkify(span, i.text);
@@ -504,8 +572,27 @@
     }
     const t = document.createElement('span');
     t.className = 'card-time';
-    t.textContent = 'Edited ' + ago(n.updated);
+    if (inTrash) {
+      const days = Math.max(1, Math.ceil((trashExpires(n) - Date.now()) / 86400_000));
+      t.textContent = `Deleted forever in ${days} day${days === 1 ? '' : 's'}`;
+    } else {
+      t.textContent = 'Edited ' + ago(n.updated);
+    }
     el.append(t);
+    if (inTrash) {
+      const bar = document.createElement('div');
+      bar.className = 'card-actions';
+      const restore = document.createElement('button');
+      restore.type = 'button';
+      restore.className = 'btn small restore';
+      restore.textContent = 'Restore';
+      const kill = document.createElement('button');
+      kill.type = 'button';
+      kill.className = 'btn small destroy';
+      kill.textContent = 'Delete forever';
+      bar.append(restore, kill);
+      el.append(bar);
+    }
     return el;
   }
 
@@ -513,6 +600,29 @@
     if (e.target.closest('a')) return;
     const c = e.target.closest('.card');
     if (!c) return;
+    if (c.classList.contains('trashed')) {
+      const n = byId(c.dataset.id);
+      if (!n?.trashed) return;
+      if (e.target.closest('.restore')) {
+        delete n.trashed;
+        touch(n);
+        renderGrid();
+        toast('Restored', {
+          label: 'Open',
+          fn: () => {
+            // Leave Trash without history.back(), which would land after the editor opens and close it.
+            if (history.state?.qnTrash) history.replaceState(null, '');
+            showView('notes');
+            openEditor(n.id);
+          },
+        });
+      } else if (e.target.closest('.destroy')) {
+        if (!confirm('Delete this forever? This can\'t be undone.')) return;
+        destroy(n);
+        renderGrid();
+      }
+      return;
+    }
     const check = e.target.closest('.check');
     if (check) {
       const n = byId(c.dataset.id);
@@ -534,7 +644,7 @@
   }
 
   // ---------- editor ----------
-  const ed = { id: null, knownUpdated: 0 };
+  const ed = { id: null, knownUpdated: 0, showChecked: false };
   const cur = () => (ed.id ? byId(ed.id) : null);
 
   // Size the editor to the part of the screen the on-screen keyboard leaves visible,
@@ -570,6 +680,7 @@
   function openEditor(id, focus) {
     const n = byId(id);
     if (!n) return;
+    if (ed.id !== id) ed.showChecked = false; // checked items always start collapsed
     ed.id = id;
     els.palette.hidden = true;
     els.colorBtn.setAttribute('aria-expanded', 'false');
@@ -612,13 +723,14 @@
 
   // Re-renders the open note after a change arrived from Drive, keeping the cursor where it was.
   function afterRemoteChange() {
+    purgeTrash();
     renderGrid();
     if (!ed.id) return;
     const n = cur();
-    if (!n || n.deleted) {
+    if (!n || !live(n)) {
       ed.id = null;
       els.dlg.close();
-      toast('This note was deleted on another device');
+      toast(n?.trashed ? 'This note was moved to Trash on another device' : 'This note was deleted on another device');
       return;
     }
     if (n.updated === ed.knownUpdated) return;
@@ -639,14 +751,18 @@
   els.dlg.addEventListener('close', () => {
     const n = cur();
     ed.id = null;
-    if (n && !n.deleted && isEmpty(n)) { n.deleted = true; touch(n); }
+    if (n && live(n) && isEmpty(n)) { n.deleted = true; touch(n); }
     if (history.state?.qnEditor) history.back();
     renderGrid();
     if (state.dirty) scheduleSync(200);
   });
   // The phone's back button closes the editor instead of leaving the app.
-  window.addEventListener('popstate', () => { if (els.dlg.open) els.dlg.close(); });
-  if (history.state?.qnEditor) history.replaceState(null, '');
+  // It also leaves Trash.
+  window.addEventListener('popstate', () => {
+    if (els.dlg.open) els.dlg.close();
+    else if (state.view === 'trash' && !history.state?.qnTrash) showView('notes');
+  });
+  if (history.state?.qnEditor || history.state?.qnTrash) history.replaceState(null, '');
 
   // Clicking the dimmed area around the dialog closes it.
   els.dlg.addEventListener('click', (e) => {
@@ -695,10 +811,17 @@
     if (done.length) {
       const det = document.createElement('details');
       det.className = 'done-group';
-      det.open = store.get('showChecked', false);
-      det.addEventListener('toggle', () => store.set('showChecked', det.open));
+      det.open = ed.showChecked;
+      det.addEventListener('toggle', () => { ed.showChecked = det.open; });
       const sum = document.createElement('summary');
-      sum.textContent = `${done.length} checked item${done.length === 1 ? '' : 's'}`;
+      const label = document.createElement('span');
+      label.className = 'done-label';
+      label.textContent = `${done.length} checked item${done.length === 1 ? '' : 's'}`;
+      const clear = document.createElement('button');
+      clear.type = 'button';
+      clear.className = 'clear-checked';
+      clear.textContent = 'Delete checked';
+      sum.append(label, clear);
       det.append(sum, ...done.map(itemRow));
       frag.append(det);
     }
@@ -835,7 +958,20 @@
   });
 
   els.items.addEventListener('click', (e) => {
-    if (e.target.closest('.item-del')) {
+    if (e.target.closest('.clear-checked')) {
+      e.preventDefault(); // don't also open/close the checked group
+      const n = cur();
+      if (!n) return;
+      const before = n.items;
+      const count = before.filter((i) => i.done).length;
+      n.items = before.filter((i) => !i.done);
+      touch(n);
+      renderItems();
+      toast(`Deleted ${count} checked item${count === 1 ? '' : 's'}`, {
+        label: 'Undo',
+        fn: () => { n.items = before; touch(n); if (ed.id === n.id) renderItems(); renderGrid(); },
+      });
+    } else if (e.target.closest('.item-del')) {
       const c = itemCtx(e.target);
       if (!c) return;
       c.n.items.splice(c.idx, 1);
@@ -923,13 +1059,11 @@
   els.deleteBtn.addEventListener('click', () => {
     const n = cur();
     if (!n) return;
-    const wasEmpty = isEmpty(n);
-    n.deleted = true;
+    if (isEmpty(n)) { n.deleted = true; touch(n); closeEditor(); return; } // nothing worth keeping
+    n.trashed = Date.now();
     touch(n);
     closeEditor();
-    if (!wasEmpty) {
-      toast('Note deleted', { label: 'Undo', fn: () => { delete n.deleted; touch(n); renderGrid(); } });
-    }
+    toast(`${n.type === 'list' ? 'List' : 'Note'} moved to Trash`, { label: 'Undo', fn: () => { delete n.trashed; touch(n); renderGrid(); } });
   });
 
   els.doneBtn.addEventListener('click', closeEditor);
@@ -981,7 +1115,7 @@
     return label ? `${label} ${url}` : url;
   }
 
-  const isToDo = (n) => !n.deleted && n.title.replace(/\s+/g, ' ').trim().toLowerCase() === 'to do';
+  const isToDo = (n) => live(n) && n.title.replace(/\s+/g, ' ').trim().toLowerCase() === 'to do';
 
   // Adds shared links to the bottom of the note or list titled "To do", creating the list if needed.
   function applyPendingShares() {
@@ -1017,6 +1151,15 @@
   // ---------- wiring ----------
   els.newNote.addEventListener('click', () => newNote('text'));
   els.newList.addEventListener('click', () => newNote('list'));
+  els.trashBtn.addEventListener('click', openTrash);
+  els.trashBack.addEventListener('click', closeTrash);
+  els.trashEmpty.addEventListener('click', () => {
+    const items = state.notes.filter((n) => n.trashed && !n.deleted);
+    if (!items.length) return;
+    if (!confirm(`Delete ${items.length} item${items.length === 1 ? '' : 's'} in Trash forever? This can't be undone.`)) return;
+    for (const n of items) destroy(n);
+    renderGrid();
+  });
   els.search.addEventListener('input', () => { state.query = els.search.value; renderGrid(); });
   els.search.addEventListener('keydown', (e) => {
     if (e.key === 'Escape' && els.search.value) {
@@ -1050,6 +1193,7 @@
     if (document.visibilityState !== 'visible') return;
     if (tokenValid()) sync();
     else if (!syncing) refreshAuthIfSafe({ idleMs: 20_000 }); // signed out an hour later: renew while idle
+    purgeTrash();
     if (!els.dlg.open) renderGrid(); // refresh "Edited … ago"
     else if (ed.id) els.edTime.textContent = 'Edited ' + ago(cur()?.updated || Date.now());
   }, POLL_MS);
@@ -1069,6 +1213,7 @@
 
   document.getElementById('version').textContent = 'v' + (window.APP_VERSION ?? '?');
 
+  purgeTrash();
   renderGrid();
   renderAuth();
   // Add shared links after the first sync, so they go into the latest copy of "To do"

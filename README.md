@@ -6,6 +6,8 @@ A small installable web app (PWA) for quick notes and to-do lists. It syncs betw
 - Each note can have its own background color, and you can pin notes to the top.
 - Tap the box next to a checklist item on the note card to check it off without opening the note.
 - If you paste several lines into a checklist item, each line becomes its own item. `- [ ]`, `- [x]`, `☐` and `☑` markers are recognised.
+- Checked items are tucked under a collapsed "checked items" group. **Delete checked** there removes them all at once.
+- Deleted notes and lists go to the Trash (the bin icon at the top), where you can restore them. Anything in the Trash is deleted for good after 7 days.
 - The copy button puts the whole note on the clipboard.
 - Works offline. Notes are kept on the device and saved to Drive the next time you're online and signed in.
 - Plain HTML/CSS/JS with no build step and no libraries.
@@ -17,7 +19,8 @@ All notes are stored in a single file, `QuickNotes.json`, in the root of My Driv
 - There is no Sync button. Edits are saved to Drive about 1.5 seconds after you stop typing.
 - While the app is open, it checks Drive for changes every 15 seconds and whenever you switch back to it. If the file hasn't changed, the check costs one small request.
 - Each sync downloads the file, merges it with the notes on the device, and uploads the result only if something changed. If the same note was edited on two devices, the most recent edit wins. Changes to different notes never overwrite each other.
-- When you delete a note, a marker is kept in the file for 30 days so that the delete also reaches your other devices.
+- Trash is synced too, so a note moved to the Trash on one device is in the Trash on all of them.
+- When a note is deleted for good, a marker is kept in the file for 30 days so that the delete also reaches your other devices.
 
 ## Google permissions
 

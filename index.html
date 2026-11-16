@@ -19,6 +19,9 @@
       <span id="version" class="version"></span>
     </div>
     <div id="status" class="status" role="status" aria-live="polite"></div>
+    <button id="trash-btn" class="icon-btn" type="button" title="Trash" aria-label="Trash" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13M9 7V4h6v3"/></svg>
+    </button>
     <button id="signin-btn" class="btn primary" type="button" hidden>Sign in</button>
   </header>
 
@@ -29,6 +32,12 @@
       <button id="new-note" class="btn primary" type="button" title="New note (N)">+ Note</button>
       <button id="new-list" class="btn primary" type="button" title="New list (L)">+ List</button>
     </div>
+    <div id="trash-bar" class="trash-bar" hidden>
+      <button id="trash-back" class="btn" type="button">← Back</button>
+      <h2 class="trash-title">Trash</h2>
+      <button id="trash-empty" class="btn" type="button">Empty Trash</button>
+    </div>
+    <p id="trash-note" class="trash-note" hidden>Notes and lists in Trash are deleted forever after 7 days.</p>
 
     <section id="pinned-sec" class="sec" hidden>
       <h2 class="sec-head">Pinned</h2>

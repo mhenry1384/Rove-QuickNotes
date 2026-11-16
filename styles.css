@@ -157,6 +157,15 @@ button, input, textarea { font: inherit; color: inherit; }
 @media (max-width: 520px) {
   .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 }
+.trash-bar { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.trash-title { flex: 1; margin: 0; font-size: 1.15rem; font-weight: 650; }
+.trash-note { margin: 4px 4px 16px; font-size: 0.85rem; color: var(--muted); }
+.card.trashed { cursor: default; padding-bottom: 12px; }
+.card.trashed:hover { box-shadow: var(--shadow); }
+.card.trashed.clipped::after { display: none; }
+.card-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.btn.small { min-height: 34px; padding: 4px 10px; font-size: 0.85rem; background: transparent; border-color: rgba(127, 127, 127, 0.4); }
+.card-list .check:disabled { cursor: default; opacity: 0.4; }
 .empty { text-align: center; color: var(--muted); padding: 48px 16px; }
 .empty .btn { margin-top: 12px; }
 
@@ -267,7 +276,30 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .add-item:hover { color: var(--text); }
 .done-group { margin-top: 10px; border-top: 1px solid rgba(127, 127, 127, 0.25); padding-top: 6px; }
-.done-group summary { cursor: pointer; color: var(--muted); font-size: 0.9rem; padding: 4px 0; }
+.done-group summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 4px 0;
+}
+.done-group summary::-webkit-details-marker { display: none; }
+.done-group summary::before { content: "▸"; width: 18px; text-align: center; }
+.done-group[open] summary::before { content: "▾"; }
+.done-label { flex: 1; }
+.clear-checked {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 0.85rem;
+  padding: 6px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.clear-checked:hover { background: rgba(127, 127, 127, 0.18); color: var(--text); }
 
 .palette {
   display: flex;
