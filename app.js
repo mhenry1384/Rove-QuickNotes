@@ -682,19 +682,28 @@
 
   // Grow the editor out of the card that was clicked, like a quick zoom.
   const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
-  function animateOpen(fromEl) {
-    if (!fromEl || reduceMotion.matches || !els.dlg.animate) return;
-    const a = fromEl.getBoundingClientRect();
+  // Returns the animations (or null if there's nothing to animate). Closing runs the same thing in reverse.
+  function zoomCard(cardEl, closing) {
+    if (!cardEl || reduceMotion.matches || !els.dlg.animate) return null;
+    const a = cardEl.getBoundingClientRect();
     const b = els.dlg.getBoundingClientRect();
-    if (!a.width || !b.width) return;
-    const from = `translate(${a.left - b.left}px, ${a.top - b.top}px) scale(${a.width / b.width}, ${a.height / b.height})`;
-    const opts = { duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' };
-    els.dlg.animate([
-      { transformOrigin: '0 0', transform: from, opacity: 0.6 },
+    if (!a.width || !b.width) return null;
+    const card = `translate(${a.left - b.left}px, ${a.top - b.top}px) scale(${a.width / b.width}, ${a.height / b.height})`;
+    const frames = [
+      { transformOrigin: '0 0', transform: card, opacity: 0.6 },
       { transformOrigin: '0 0', transform: 'none', opacity: 1 },
-    ], opts);
-    try { els.dlg.animate({ opacity: [0, 1] }, { ...opts, pseudoElement: '::backdrop' }); } catch {}
+    ];
+    const opts = {
+      duration: closing ? 150 : 180,
+      easing: closing ? 'cubic-bezier(0.3, 0, 0.8, 0.15)' : 'cubic-bezier(0.2, 0, 0, 1)',
+      direction: closing ? 'reverse' : 'normal',
+      fill: closing ? 'forwards' : 'none', // stay shrunk until the dialog actually closes
+    };
+    const anims = [els.dlg.animate(frames, opts)];
+    try { anims.push(els.dlg.animate({ opacity: [0, 1] }, { ...opts, pseudoElement: '::backdrop' })); } catch {}
+    return anims;
   }
+  const cardFor = (id) => id && document.querySelector(`.card[data-id="${CSS.escape(id)}"]`);
 
   function openEditor(id, focus, fromEl) {
     const n = byId(id);
@@ -707,7 +716,7 @@
     renderEditor();
     if (!els.dlg.open) {
       els.dlg.showModal();
-      animateOpen(fromEl);
+      zoomCard(fromEl, false);
       history.pushState({ qnEditor: true }, '');
     }
     requestAnimationFrame(() => {
@@ -764,12 +773,28 @@
     if ((a === els.title || a === els.text) && caret != null) { a.focus(); a.setSelectionRange(caret, caret); }
   }
 
-  function closeEditor() { if (els.dlg.open) els.dlg.close(); }
+  // Shrinks the editor back into its card, then closes it. Pass instant=true to skip the animation.
+  let closing = null;
+  function closeEditor(instant) {
+    if (!els.dlg.open || closing) return;
+    const anims = instant === true ? null : zoomCard(cardFor(ed.id), true);
+    if (!anims) { els.dlg.close(); return; }
+    closing = anims;
+    anims[0].finished.catch(() => {}).then(() => {
+      if (closing !== anims) return;
+      closing = null;
+      els.dlg.close();
+      for (const an of anims) an.cancel();
+    });
+  }
+  // Escape key: animate like the other ways of closing.
+  els.dlg.addEventListener('cancel', (e) => { e.preventDefault(); closeEditor(); });
 
   const isEmpty = (n) => !n.title.trim() &&
     (n.type === 'list' ? n.items.every((i) => !i.text.trim()) : !n.text.trim());
 
   els.dlg.addEventListener('close', () => {
+    if (closing) { for (const an of closing) an.cancel(); closing = null; }
     const n = cur();
     ed.id = null;
     hideNotice();
@@ -781,7 +806,7 @@
   // The phone's back button closes the editor instead of leaving the app.
   // It also leaves Trash.
   window.addEventListener('popstate', () => {
-    if (els.dlg.open) els.dlg.close();
+    if (els.dlg.open) closeEditor();
     else if (state.view === 'trash' && !history.state?.qnTrash) showView('notes');
   });
   if (history.state?.qnEditor || history.state?.qnTrash) history.replaceState(null, '');
@@ -1087,10 +1112,10 @@
   els.deleteBtn.addEventListener('click', () => {
     const n = cur();
     if (!n) return;
-    if (isEmpty(n)) { n.deleted = true; touch(n); closeEditor(); return; } // nothing worth keeping
+    if (isEmpty(n)) { n.deleted = true; touch(n); closeEditor(true); return; } // nothing worth keeping
     n.trashed = Date.now();
     touch(n);
-    closeEditor();
+    closeEditor(true);
     toast(`${n.type === 'list' ? 'List' : 'Note'} moved to Trash`, { label: 'Undo', fn: () => { delete n.trashed; touch(n); renderGrid(); } });
   });
 
