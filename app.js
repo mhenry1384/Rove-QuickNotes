@@ -89,6 +89,7 @@
     dlg: $('#editor'), title: $('#ed-title'), text: $('#ed-text'), items: $('#ed-items'),
     palette: $('#palette'), colorBtn: $('#ed-color'), pinBtn: $('#ed-pin'), convertBtn: $('#ed-convert'),
     copyBtn: $('#ed-copy'), deleteBtn: $('#ed-delete'), doneBtn: $('#ed-done'), edTime: $('#ed-time'),
+    notice: $('#ed-notice'), noticeMsg: $('#ed-notice-msg'), noticeBtn: $('#ed-notice-btn'),
     toast: $('#toast'), toastMsg: $('#toast-msg'), toastBtn: $('#toast-btn'),
   };
 
@@ -630,12 +631,12 @@
       if (item) { item.done = true; touch(n); renderGrid(); toast('Checked off', { label: 'Undo', fn: () => { item.done = false; touch(n); renderGrid(); } }); }
       return;
     }
-    openEditor(c.dataset.id);
+    openEditor(c.dataset.id, null, c);
   }
   function onGridKey(e) {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('card')) {
       e.preventDefault();
-      openEditor(e.target.dataset.id);
+      openEditor(e.target.dataset.id, null, e.target);
     }
   }
   for (const g of [els.pinned, els.others]) {
@@ -645,6 +646,8 @@
 
   // ---------- editor ----------
   const ed = { id: null, knownUpdated: 0, showChecked: false };
+  let noticeTimer = null; // editor bar notice, see showNotice()
+  let noticeAction = null;
   const cur = () => (ed.id ? byId(ed.id) : null);
 
   // Size the editor to the part of the screen the on-screen keyboard leaves visible,
@@ -677,16 +680,34 @@
     openEditor(n.id, type === 'list' ? 'item' : 'text');
   }
 
-  function openEditor(id, focus) {
+  // Grow the editor out of the card that was clicked, like a quick zoom.
+  const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+  function animateOpen(fromEl) {
+    if (!fromEl || reduceMotion.matches || !els.dlg.animate) return;
+    const a = fromEl.getBoundingClientRect();
+    const b = els.dlg.getBoundingClientRect();
+    if (!a.width || !b.width) return;
+    const from = `translate(${a.left - b.left}px, ${a.top - b.top}px) scale(${a.width / b.width}, ${a.height / b.height})`;
+    const opts = { duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' };
+    els.dlg.animate([
+      { transformOrigin: '0 0', transform: from, opacity: 0.6 },
+      { transformOrigin: '0 0', transform: 'none', opacity: 1 },
+    ], opts);
+    try { els.dlg.animate({ opacity: [0, 1] }, { ...opts, pseudoElement: '::backdrop' }); } catch {}
+  }
+
+  function openEditor(id, focus, fromEl) {
     const n = byId(id);
     if (!n) return;
     if (ed.id !== id) ed.showChecked = false; // checked items always start collapsed
+    if (ed.id !== id) hideNotice();
     ed.id = id;
     els.palette.hidden = true;
     els.colorBtn.setAttribute('aria-expanded', 'false');
     renderEditor();
     if (!els.dlg.open) {
       els.dlg.showModal();
+      animateOpen(fromEl);
       history.pushState({ qnEditor: true }, '');
     }
     requestAnimationFrame(() => {
@@ -751,6 +772,7 @@
   els.dlg.addEventListener('close', () => {
     const n = cur();
     ed.id = null;
+    hideNotice();
     if (n && live(n) && isEmpty(n)) { n.deleted = true; touch(n); }
     if (history.state?.qnEditor) history.back();
     renderGrid();
@@ -963,13 +985,19 @@
       const n = cur();
       if (!n) return;
       const before = n.items;
-      const count = before.filter((i) => i.done).length;
+      const removed = before.filter((i) => i.done);
       n.items = before.filter((i) => !i.done);
       touch(n);
       renderItems();
-      toast(`Deleted ${count} checked item${count === 1 ? '' : 's'}`, {
-        label: 'Undo',
-        fn: () => { n.items = before; touch(n); if (ed.id === n.id) renderItems(); renderGrid(); },
+      showNotice(`Deleted ${removed.length} checked`, () => {
+        // Put the deleted items back where they were, keeping any edits made since.
+        const now = new Map(n.items.map((i) => [i.id, i]));
+        const back = before.map((i) => now.get(i.id) || (removed.includes(i) ? i : null)).filter(Boolean);
+        const added = n.items.filter((i) => !before.some((b) => b.id === i.id));
+        n.items = [...back, ...added];
+        touch(n);
+        if (ed.id === n.id) renderItems();
+        renderGrid();
       });
     } else if (e.target.closest('.item-del')) {
       const c = itemCtx(e.target);
@@ -1067,6 +1095,25 @@
   });
 
   els.doneBtn.addEventListener('click', closeEditor);
+
+  // ---------- editor bar notice (stays a few minutes, next to the trash icon) ----------
+  function showNotice(msg, fn) {
+    els.noticeMsg.textContent = msg;
+    noticeAction = fn;
+    els.notice.hidden = false;
+    clearTimeout(noticeTimer);
+    noticeTimer = setTimeout(hideNotice, 3 * 60 * 1000);
+  }
+  function hideNotice() {
+    clearTimeout(noticeTimer);
+    els.notice.hidden = true;
+    noticeAction = null;
+  }
+  els.noticeBtn.addEventListener('click', () => {
+    const fn = noticeAction;
+    hideNotice();
+    fn?.();
+  });
 
   // ---------- toast ----------
   const popoverOK = typeof els.toast.showPopover === 'function';
