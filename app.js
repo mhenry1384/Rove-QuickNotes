@@ -436,9 +436,9 @@
     const others = shown.filter((n) => !n.pinned);
 
     els.pinnedSec.hidden = !pinned.length;
-    els.pinned.replaceChildren(...pinned.map(card));
+    els.pinned.replaceChildren(...pinned.map((n) => card(n)));
     els.othersHead.hidden = !pinned.length || !others.length;
-    els.others.replaceChildren(...others.map(card));
+    els.others.replaceChildren(...others.map((n) => card(n)));
 
     els.empty.hidden = !!shown.length;
     if (!shown.length) {
