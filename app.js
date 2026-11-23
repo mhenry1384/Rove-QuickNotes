@@ -405,8 +405,27 @@
     if (msg && !isError && !sticky) statusTimer = setTimeout(() => { els.status.textContent = ''; }, 3000);
   }
 
+  // Changes are only allowed while signed in. An expired token still counts while it can be
+  // renewed without a tap (and offline edits are fine); once Google needs a tap, notes are read only.
+  const loggedIn = () => CONFIGURED && (tokenValid() || (signedInOnce() && !authNeeded));
+  let wasLocked = null;
+
+  // Says why nothing happened, with a way to sign in. Returns true when changes are allowed.
+  function canEdit() {
+    if (loggedIn()) return true;
+    toast('Sign in to make changes', CONFIGURED ? { label: 'Sign in', fn: () => authRedirect(true) } : null);
+    return false;
+  }
+
   // The Sign in button only appears when Google needs you to tap something.
   function renderAuth() {
+    const locked = !loggedIn();
+    if (locked !== wasLocked) {
+      wasLocked = locked;
+      document.body.classList.toggle('locked', locked);
+      if (ed.id) { renderEditor(); showLockNotice(); }
+      renderGrid();
+    }
     const need = CONFIGURED && !tokenValid() && (authNeeded || !signedInOnce());
     // Before the first sign-in, the big button in the middle of the page is enough.
     els.signinBtn.hidden = !need || !signedInOnce();
@@ -542,7 +561,7 @@
         b.type = 'button';
         b.className = 'check';
         b.dataset.item = i.id;
-        b.disabled = inTrash;
+        b.disabled = inTrash || !loggedIn();
         b.setAttribute('aria-label', `Mark done: ${i.text}`);
         const span = document.createElement('span');
         linkify(span, i.text);
@@ -604,6 +623,7 @@
     if (c.classList.contains('trashed')) {
       const n = byId(c.dataset.id);
       if (!n?.trashed) return;
+      if (e.target.closest('.restore, .destroy') && !canEdit()) return;
       if (e.target.closest('.restore')) {
         delete n.trashed;
         touch(n);
@@ -626,6 +646,7 @@
     }
     const check = e.target.closest('.check');
     if (check) {
+      if (!canEdit()) return;
       const n = byId(c.dataset.id);
       const item = n?.items.find((i) => i.id === check.dataset.item);
       if (item) { item.done = true; touch(n); renderGrid(); toast('Checked off', { label: 'Undo', fn: () => { item.done = false; touch(n); renderGrid(); } }); }
@@ -670,6 +691,7 @@
   }
 
   function newNote(type) {
+    if (!canEdit()) return;
     const now = Date.now();
     const n = normNote({
       id: uid(), type, created: now, updated: now,
@@ -714,6 +736,7 @@
     els.palette.hidden = true;
     els.colorBtn.setAttribute('aria-expanded', 'false');
     renderEditor();
+    showLockNotice();
     if (!els.dlg.open) {
       els.dlg.showModal();
       zoomCard(fromEl, false);
@@ -734,6 +757,7 @@
     if (!n) return;
     ed.knownUpdated = n.updated;
     els.dlg.dataset.color = n.color;
+    els.title.readOnly = els.text.readOnly = !loggedIn();
     if (els.title.value !== n.title) els.title.value = n.title;
     const isList = n.type === 'list';
     els.text.hidden = isList;
@@ -798,7 +822,7 @@
     const n = cur();
     ed.id = null;
     hideNotice();
-    if (n && live(n) && isEmpty(n)) { n.deleted = true; touch(n); }
+    if (n && live(n) && isEmpty(n) && loggedIn()) { n.deleted = true; touch(n); }
     if (history.state?.qnEditor) history.back();
     renderGrid();
     if (state.dirty) scheduleSync(200);
@@ -818,7 +842,13 @@
     if (e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) closeEditor();
   });
 
-  els.title.addEventListener('input', () => { const n = cur(); if (n) { n.title = els.title.value; touch(n); } });
+  els.title.addEventListener('input', () => {
+    const n = cur();
+    if (!n) return;
+    if (!loggedIn()) { els.title.value = n.title; return; }
+    n.title = els.title.value;
+    touch(n);
+  });
   els.title.addEventListener('keydown', (e) => {
     if (e.key !== 'Enter' || e.isComposing) return;
     e.preventDefault();
@@ -828,6 +858,7 @@
   els.text.addEventListener('input', () => {
     const n = cur();
     if (!n) return;
+    if (!loggedIn()) { els.text.value = n.text; return; }
     n.text = els.text.value;
     autosize(els.text);
     touch(n);
@@ -891,9 +922,11 @@
     const cb = document.createElement('input');
     cb.type = 'checkbox';
     cb.checked = i.done;
+    cb.disabled = !loggedIn();
     cb.setAttribute('aria-label', 'Done');
     const ta = document.createElement('textarea');
     ta.rows = 1;
+    ta.readOnly = !loggedIn();
     ta.value = i.text;
     ta.placeholder = 'List item';
     ta.enterKeyHint = 'next';
@@ -925,6 +958,7 @@
     if (e.target.type !== 'checkbox') return;
     const c = itemCtx(e.target);
     if (!c) return;
+    if (!canEdit()) { e.target.checked = c.item.done; return; }
     c.item.done = e.target.checked;
     touch(c.n);
     renderItems();
@@ -934,6 +968,7 @@
     if (e.target.tagName !== 'TEXTAREA') return;
     const c = itemCtx(e.target);
     if (!c) return;
+    if (!loggedIn()) { e.target.value = c.item.text; return; }
     // Some phone keyboards insert a newline instead of sending an Enter keydown.
     if (e.target.value.includes('\n')) {
       const [first, ...rest] = e.target.value.split('\n');
@@ -950,7 +985,7 @@
   });
 
   els.items.addEventListener('keydown', (e) => {
-    if (e.target.tagName !== 'TEXTAREA' || e.isComposing) return;
+    if (e.target.tagName !== 'TEXTAREA' || e.isComposing || !loggedIn()) return;
     const c = itemCtx(e.target);
     if (!c) return;
     const ta = e.target;
@@ -982,7 +1017,7 @@
   });
 
   els.items.addEventListener('paste', (e) => {
-    if (e.target.tagName !== 'TEXTAREA') return;
+    if (e.target.tagName !== 'TEXTAREA' || !loggedIn()) return;
     const text = e.clipboardData?.getData('text/plain') || '';
     if (!/\r?\n/.test(text.trim())) return;
     const c = itemCtx(e.target);
@@ -1005,6 +1040,7 @@
   });
 
   els.items.addEventListener('click', (e) => {
+    if (e.target.closest('.clear-checked, .item-del, .add-item') && !canEdit()) { e.preventDefault(); return; }
     if (e.target.closest('.clear-checked')) {
       e.preventDefault(); // don't also open/close the checked group
       const n = cur();
@@ -1059,7 +1095,7 @@
   els.palette.addEventListener('click', (e) => {
     const s = e.target.closest('.swatch');
     const n = cur();
-    if (!s || !n) return;
+    if (!s || !n || !canEdit()) return;
     n.color = s.dataset.color;
     touch(n);
     renderEditor();
@@ -1067,7 +1103,7 @@
 
   els.pinBtn.addEventListener('click', () => {
     const n = cur();
-    if (!n) return;
+    if (!n || !canEdit()) return;
     n.pinned = !n.pinned;
     touch(n);
     renderEditor();
@@ -1075,7 +1111,7 @@
 
   els.convertBtn.addEventListener('click', () => {
     const n = cur();
-    if (!n) return;
+    if (!n || !canEdit()) return;
     if (n.type === 'text') {
       const items = n.text.split(/\r?\n/).map(parseLine).filter((l) => l.text)
         .map((l) => ({ id: uid(), text: l.text, done: l.done }));
@@ -1111,7 +1147,7 @@
 
   els.deleteBtn.addEventListener('click', () => {
     const n = cur();
-    if (!n) return;
+    if (!n || !canEdit()) return;
     if (isEmpty(n)) { n.deleted = true; touch(n); closeEditor(true); return; } // nothing worth keeping
     n.trashed = Date.now();
     touch(n);
@@ -1122,14 +1158,17 @@
   els.doneBtn.addEventListener('click', closeEditor);
 
   // ---------- editor bar notice (stays a few minutes, next to the trash icon) ----------
-  function showNotice(msg, fn) {
+  function showNotice(msg, fn, label = 'Undo') {
     els.noticeMsg.textContent = msg;
+    els.noticeBtn.textContent = label;
+    els.noticeBtn.hidden = !fn;
     noticeAction = fn;
     els.notice.hidden = false;
     clearTimeout(noticeTimer);
     noticeTimer = setTimeout(hideNotice, 3 * 60 * 1000);
   }
   function hideNotice() {
+    lockNoticeShown = false;
     clearTimeout(noticeTimer);
     els.notice.hidden = true;
     noticeAction = null;
@@ -1139,6 +1178,16 @@
     hideNotice();
     fn?.();
   });
+  // While signed out the open note is read only; say so in the editor bar.
+  let lockNoticeShown = false;
+  function showLockNotice() {
+    if (!loggedIn()) {
+      showNotice('Read only', CONFIGURED ? () => authRedirect(true) : null, 'Sign in to edit');
+      lockNoticeShown = true;
+    } else if (lockNoticeShown) {
+      hideNotice();
+    }
+  }
 
   // ---------- toast ----------
   const popoverOK = typeof els.toast.showPopover === 'function';
@@ -1193,6 +1242,8 @@
   function applyPendingShares() {
     const pending = store.get('pendingShares', []);
     if (!pending.length) return;
+    // Kept until you sign in; they're added then.
+    if (!canEdit()) return;
     store.del('pendingShares');
     const lines = pending.map(shareLine).filter(Boolean);
     if (!lines.length) return;
@@ -1228,6 +1279,7 @@
   els.trashEmpty.addEventListener('click', () => {
     const items = state.notes.filter((n) => n.trashed && !n.deleted);
     if (!items.length) return;
+    if (!canEdit()) return;
     if (!confirm(`Delete ${items.length} item${items.length === 1 ? '' : 's'} in Trash forever? This can't be undone.`)) return;
     for (const n of items) destroy(n);
     renderGrid();
@@ -1242,7 +1294,7 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (els.dlg.open || els.actions.hidden || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (els.dlg.open || els.actions.hidden || !loggedIn() || e.ctrlKey || e.metaKey || e.altKey) return;
     if (/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName)) return;
     if (e.key === '/') { e.preventDefault(); els.search.focus(); }
     else if (e.key === 'n' || e.key === 'N') { e.preventDefault(); newNote('text'); }

@@ -415,3 +415,9 @@ button, input, textarea { font: inherit; color: inherit; }
 }
 .toast-btn { border: none; background: transparent; color: #f6b56b; font-weight: 700; cursor: pointer; padding: 4px; }
 .toast:popover-open, .toast.shown { display: flex; }
+
+/* Signed out: notes are read only, so hide the controls that change them. */
+body.locked #new-note, body.locked #new-list, body.locked #trash-empty, body.locked .card-actions,
+body.locked .add-item, body.locked .clear-checked, body.locked .item-del,
+body.locked #ed-color, body.locked #ed-pin, body.locked #ed-convert, body.locked #ed-delete, body.locked #palette { display: none; }
+body.locked .card .check { cursor: default; }
